@@ -1,0 +1,8 @@
+{
+  "name": "Backorder \u0026 Production Conflict Analyzer V2",
+  "description": "Automatically parses back-order data to highlight urgent items and detect conflicts with production work orders to prevent delays.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
