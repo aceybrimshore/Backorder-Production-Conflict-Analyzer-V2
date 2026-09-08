@@ -140,22 +140,15 @@ export const CancelOrderEmailModal: React.FC<CancelOrderEmailModalProps> = ({
         setBody(
 `Dear Customer Service,
 
-Please cancel all sales order lines relating to the obsolete item(s) listed below.
+Please cancel sales order lines relating to the obsolete item(s) listed below.
 
 Item Details
 
 Item Number / SKU: ${singleGroup.sku}
 Description: ${singleGroup.description}
-Classification: OBSOLETE (Code: ${singleGroup.classificationCode})
-Warehouse Location: ${singleGroup.locations}
-Current Stock on Hand: ${singleGroup.stockOnHand} unit${singleGroup.stockOnHand === 1 ? '' : 's'}
-Total Sales Orders: ${singleGroup.soNumbers.length}
-Total Backorder Quantity: ${singleGroup.totalQty} unit${singleGroup.totalQty === 1 ? '' : 's'}
-Total Order Value: $${singleGroup.totalValue.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} AUD (ex GST)
 
-Sales Orders for Cancellation ${soListFormatted}
+Sales Orders for Cancellation: ${soListFormatted}
 
-Please process the cancellations at your earliest convenience.
 
 Regards,`
         );
@@ -166,24 +159,16 @@ Regards,`
         setBody(
 `Dear Customer Service,
 
-Please cancel all sales order lines relating to the obsolete item(s) listed below.
+Please cancel sales order lines relating to the obsolete item(s) listed below.
 
 Item Details
 
 ${groupedBySku.map(g => 
 `Item Number / SKU: ${g.sku}
 Description: ${g.description}
-Classification: OBSOLETE (Code: ${g.classificationCode})
-Warehouse Location: ${g.locations}
-Current Stock on Hand: ${g.stockOnHand} unit${g.stockOnHand === 1 ? '' : 's'}
-Total Sales Orders: ${g.soNumbers.length}
-Total Backorder Quantity: ${g.totalQty} unit${g.totalQty === 1 ? '' : 's'}
-Total Order Value: $${g.totalValue.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} AUD (ex GST)`
+Sales Orders for Cancellation: ${g.soNumbers.join(', ')}`
 ).join('\n\n')}
 
-Sales Orders for Cancellation ${soListFormatted}
-
-Please process the cancellations at your earliest convenience.
 
 Regards,`
         );
@@ -556,8 +541,8 @@ Production Planning Management`
                     : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                <div className="font-semibold text-xs">Customer Service (Standard)</div>
-                <div className="text-[10px] text-slate-500">Clean Item Details & Bulk SO list format</div>
+                <div className="font-semibold text-xs">Customer Service (Simplified)</div>
+                <div className="text-[10px] text-slate-500">Simplified clean SKU, description & SO list format</div>
               </button>
 
               <button
