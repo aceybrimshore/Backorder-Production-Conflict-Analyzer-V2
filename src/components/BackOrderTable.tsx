@@ -125,6 +125,19 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
   }
 }
 
+// Download CSV file directly to user's computer
+function downloadCsvFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
 // Format items for spreadsheet pasting or text export
 function formatItemsForClipboard(
   items: BackOrderItem[],
@@ -134,25 +147,45 @@ function formatItemsForClipboard(
     return Array.from(new Set(items.map(i => i.item))).join('\n');
   }
 
-  const headers = [
-    'Urgency',
-    'SKU',
-    'Document Number',
-    'Customer PO',
-    'Item Type',
-    'Back Order Qty',
-    'Required Date',
-    'Work Order Status',
-    'Order Value ($)',
-    'Location',
-    'Customer',
-    'Brand'
-  ];
+  const hasPriorityRank = items.some(i => i.priorityRank !== undefined || i.isConsolidated);
+
+  const headers = hasPriorityRank
+    ? [
+        'Priority Rank',
+        'SKU / Item',
+        'Urgency',
+        'Total SO Count',
+        'Sales Order Numbers',
+        'Customer POs',
+        'Item Type',
+        'Total Back Order Qty',
+        'Earliest Required Date',
+        'Work Order Status',
+        'Total Order Value ($ ex GST)',
+        'Warehouse Location(s)',
+        'Customers',
+        'Brand'
+      ]
+    : [
+        'Urgency',
+        'SKU',
+        'Document Number',
+        'Customer PO',
+        'Item Type',
+        'Back Order Qty',
+        'Required Date',
+        'Work Order Status',
+        'Order Value ($)',
+        'Location',
+        'Customer',
+        'Brand'
+      ];
 
   const getRowValues = (i: BackOrderItem) => {
     let woStatusText = 'Covered';
     if (i.isConsolidated) {
-      woStatusText = `Obsolete Combined (${i.salesOrderCount} Orders)`;
+      if (i.conflictStatus === 'OBSOLETE') woStatusText = `Obsolete Combined (${i.salesOrderCount} Orders)`;
+      else woStatusText = `Consolidated (${i.salesOrderCount} Orders)`;
     } else if (i.isObsolete || i.conflictStatus === 'OBSOLETE') {
       woStatusText = `Obsolete (${i.classificationCode || 'XX'})`;
     } else if (i.isShippingOrNonInventory) woStatusText = 'Non-Inventory';
@@ -163,6 +196,25 @@ function formatItemsForClipboard(
     const docStr = i.isConsolidated && i.salesOrderList && i.salesOrderList.length > 0
       ? i.salesOrderList.join(', ')
       : i.documentNumber;
+
+    if (hasPriorityRank) {
+      return [
+        i.priorityRank ? `#${i.priorityRank}` : 'N/A',
+        i.item,
+        i.urgency,
+        i.salesOrderCount || 1,
+        docStr,
+        i.customerPo || '',
+        i.typeCategory || i.classCategory || 'Standard',
+        i.backOrderQty,
+        i.supplyRequiredByDate || '',
+        woStatusText,
+        i.backOrderValueExGst.toFixed(2),
+        i.location || '',
+        i.customerName || '',
+        i.brand || ''
+      ];
+    }
 
     return [
       i.urgency,
@@ -206,9 +258,10 @@ function formatItemsForClipboard(
   const rows = items.map(i => {
     if (i.isConsolidated) {
       const soList = i.salesOrderList ? i.salesOrderList.join(', ') : i.documentNumber;
-      return `• [${i.urgency}] ${i.item} (OBSOLETE COMBINED - ${i.salesOrderCount} SOs: ${soList}) | Total Qty: ${i.backOrderQty} | Req: ${i.supplyRequiredByDate || 'N/A'} | Value: $${i.backOrderValueExGst.toFixed(2)} | Loc: ${i.location || 'N/A'} | Customer: ${i.customerName}`;
+      const prioStr = i.priorityRank ? `Priority #${i.priorityRank} | ` : '';
+      return `• ${prioStr}[${i.urgency}] ${i.item} (${i.salesOrderCount} SOs: ${soList}) | Total Qty: ${i.backOrderQty} | Req: ${i.supplyRequiredByDate || 'N/A'} | Value: $${i.backOrderValueExGst.toFixed(2)} AUD | Loc: ${i.location || 'N/A'}`;
     }
-    return `• [${i.urgency}] ${i.item} (Doc: ${i.documentNumber}) | Qty: ${i.backOrderQty} | Req: ${i.supplyRequiredByDate || 'N/A'} | Status: ${i.isObsolete || i.conflictStatus === 'OBSOLETE' ? `Obsolete (${i.classificationCode || 'XX'})` : i.conflictStatus} | Value: $${i.backOrderValueExGst.toFixed(2)} | Loc: ${i.location || 'N/A'} | Customer: ${i.customerName}`;
+    return `• [${i.urgency}] ${i.item} (Doc: ${i.documentNumber}) | Qty: ${i.backOrderQty} | Req: ${i.supplyRequiredByDate || 'N/A'} | Status: ${i.isObsolete || i.conflictStatus === 'OBSOLETE' ? `Obsolete (${i.classificationCode || 'XX'})` : i.conflictStatus} | Value: $${i.backOrderValueExGst.toFixed(2)} AUD | Loc: ${i.location || 'N/A'}`;
   });
   return `Backorder & Production Conflict Report (${items.length} items):\n` + rows.join('\n');
 }
@@ -447,6 +500,7 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
   const filteredItems = useMemo(() => {
     const isCombinedObsolete =
       filters.conflictStatus === 'OBSOLETE_COMBINED' || !!filters.consolidatedObsoleteView;
+    const isAllCombined = filters.conflictStatus === 'ALL_COMBINED';
 
     const baseItems = items.filter(item => {
       // Exclude Shipping / Non-Inventory if toggled
@@ -455,7 +509,7 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
       }
 
       // Conflict & Obsolete status filter
-      if (filters.conflictStatus !== 'ALL') {
+      if (filters.conflictStatus !== 'ALL' && filters.conflictStatus !== 'ALL_COMBINED') {
         if (filters.conflictStatus === 'CONFLICTS') {
           if (item.conflictStatus === 'COVERED' || item.conflictStatus === 'EXEMPT' || item.isObsolete || item.conflictStatus === 'OBSOLETE') return false;
         } else if (filters.conflictStatus === 'OBSOLETE' || filters.conflictStatus === 'OBSOLETE_COMBINED') {
@@ -514,8 +568,8 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
       return true;
     });
 
-    // When Obsolete Items (Cancel SO) - Item Combined is active, aggregate by SKU
-    if (isCombinedObsolete) {
+    // When Obsolete Items OR All Items Consolidated is active, aggregate by SKU
+    if (isCombinedObsolete || isAllCombined) {
       const skuMap = new Map<string, BackOrderItem[]>();
       baseItems.forEach(item => {
         const key = item.item.trim();
@@ -591,6 +645,23 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
           ? `${allPos.length} POs`
           : '—';
 
+        // Conflict status for group
+        let summaryConflict = first.conflictStatus;
+        if (isCombinedObsolete) {
+          summaryConflict = 'OBSOLETE';
+        } else {
+          const hasObsolete = constituentOrders.some(o => o.isObsolete || o.conflictStatus === 'OBSOLETE');
+          const hasNoWo = constituentOrders.some(o => o.conflictStatus === 'NO_WORK_ORDER');
+          const hasConflict = constituentOrders.some(o => o.conflictStatus === 'SCHEDULE_CONFLICT');
+          const hasShortage = constituentOrders.some(o => o.conflictStatus === 'QUANTITY_SHORTAGE');
+
+          if (hasObsolete) summaryConflict = 'OBSOLETE';
+          else if (hasNoWo) summaryConflict = 'NO_WORK_ORDER';
+          else if (hasConflict) summaryConflict = 'SCHEDULE_CONFLICT';
+          else if (hasShortage) summaryConflict = 'QUANTITY_SHORTAGE';
+          else summaryConflict = 'COVERED';
+        }
+
         consolidatedList.push({
           ...first,
           id: `consolidated-${sku}`,
@@ -602,6 +673,7 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
           backOrderValueExGst: totalValue,
           location: allLocations.join(', ') || first.location,
           urgency: highestUrgency,
+          conflictStatus: summaryConflict,
           cancellationStatus: combinedCancelStatus,
           supplyRequiredByDate: earliestDateStr,
           supplyRequiredDateParsed: parsedDates[0] || first.supplyRequiredDateParsed,
@@ -609,19 +681,28 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
           salesOrderCount: constituentOrders.length,
           salesOrderList: allSoNumbers,
           constituentOrders: constituentOrders,
-          conflictDetails: `${constituentOrders.length} Sales Order(s) pending cancellation across ${allSoNumbers.length} unique SO numbers for obsolete SKU ${sku}.`
+          conflictDetails: `${constituentOrders.length} Sales Order(s) combined for SKU ${sku} across ${allSoNumbers.length} unique SO numbers.`
         });
       });
 
+      // Sort by backOrderValueExGst descending by default to establish Priority Number 1 = Highest Value
+      consolidatedList.sort((a, b) => b.backOrderValueExGst - a.backOrderValueExGst);
+
+      // Assign Priority Rank (#1, #2, #3...)
+      consolidatedList.forEach((item, idx) => {
+        item.priorityRank = idx + 1;
+      });
+
+      // Apply user column sorting if user toggled sort column/order
       return consolidatedList.sort((a, b) => {
         const order = filters.sortOrder === 'asc' ? 1 : -1;
+        if (filters.sortBy === 'value') {
+          return (a.backOrderValueExGst - b.backOrderValueExGst) * order;
+        }
         if (filters.sortBy === 'urgency') {
           const rank: Record<UrgencyLevel, number> = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
           const diff = rank[b.urgency] - rank[a.urgency];
           return filters.sortOrder === 'asc' ? -diff : diff;
-        }
-        if (filters.sortBy === 'value') {
-          return (a.backOrderValueExGst - b.backOrderValueExGst) * order;
         }
         if (filters.sortBy === 'qty') {
           return (a.backOrderQty - b.backOrderQty) * order;
@@ -629,7 +710,7 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
         if (filters.sortBy === 'item') {
           return a.item.localeCompare(b.item) * order;
         }
-        return 0;
+        return (a.priorityRank! - b.priorityRank!) * order;
       });
     }
 
@@ -952,12 +1033,32 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
 
                   <div className="pt-1">
                     <button
+                      onClick={() => {
+                        const csvContent = formatItemsForClipboard(itemsToCopy, 'csv');
+                        const filename = itemsToCopy.some(i => i.isConsolidated)
+                          ? `consolidated_backorders_priority_${new Date().toISOString().slice(0, 10)}.csv`
+                          : `backorder_report_${new Date().toISOString().slice(0, 10)}.csv`;
+                        downloadCsvFile(filename, csvContent);
+                        setShowCopyDropdown(false);
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-amber-50 flex items-center space-x-2.5 text-slate-800 font-medium cursor-pointer border-b border-slate-100 bg-amber-50/50"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <div>
+                        <div className="font-bold text-slate-900 flex items-center space-x-1">
+                          <span>Download CSV File (.csv)</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500">Download directly as CSV spreadsheet file</div>
+                      </div>
+                    </button>
+
+                    <button
                       onClick={() => handleCopy('tsv')}
                       className="w-full text-left px-3 py-2 hover:bg-amber-50 flex items-center space-x-2.5 text-slate-800 font-medium cursor-pointer"
                     >
                       <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
                       <div>
-                        <div className="font-semibold text-slate-900">Excel / Google Sheets (TSV)</div>
+                        <div className="font-semibold text-slate-900">Copy for Excel / Sheets (TSV)</div>
                         <div className="text-[10px] text-slate-500">Directly paste rows into spreadsheet cells</div>
                       </div>
                     </button>
@@ -1076,12 +1177,15 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
               setCurrentPage(1);
             }}
             className={`rounded-md px-2.5 py-1 text-xs focus:ring-2 focus:ring-amber-500 font-medium ${
-              filters.conflictStatus === 'OBSOLETE' || filters.conflictStatus === 'OBSOLETE_COMBINED'
+              filters.conflictStatus === 'ALL_COMBINED'
+                ? 'bg-amber-100 border-amber-300 text-amber-950 ring-1 ring-amber-300'
+                : filters.conflictStatus === 'OBSOLETE' || filters.conflictStatus === 'OBSOLETE_COMBINED'
                 ? 'bg-rose-50 border-rose-300 text-rose-900 ring-1 ring-rose-300'
                 : 'bg-white border-slate-300 text-slate-700'
             }`}
           >
-            <option value="ALL">All WO Conflict Statuses</option>
+            <option value="ALL">All WO Conflict Statuses (Detailed SO Lines)</option>
+            <option value="ALL_COMBINED">📦 ALL Items — Consolidated by SKU (Priority #1 = Highest Value)</option>
             <option value="OBSOLETE">🚨 Obsolete Items (Cancel SO) - Detailed ({obsoleteStats.orderCount})</option>
             <option value="OBSOLETE_COMBINED">📦 Obsolete Items (Cancel SO) - Item Combined ({obsoleteStats.skuCount} SKUs)</option>
             <option value="OBSOLETE_PENDING">🚨 Obsolete - Pending Cancellation</option>
@@ -1091,6 +1195,43 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
             <option value="QUANTITY_SHORTAGE">📉 Quantity Shortage</option>
             <option value="COVERED">🟢 Covered by WO</option>
           </select>
+
+          {/* All Items View Mode Toggle Pill */}
+          {(filters.conflictStatus === 'ALL' || filters.conflictStatus === 'ALL_COMBINED') && (
+            <div className="inline-flex items-center rounded-lg p-0.5 bg-amber-100/80 border border-amber-200 text-xs shadow-2xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setFilters(prev => ({ ...prev, conflictStatus: 'ALL' }));
+                  setCurrentPage(1);
+                }}
+                className={`px-2.5 py-1 rounded-md font-bold text-[11px] transition-all cursor-pointer flex items-center space-x-1 ${
+                  filters.conflictStatus === 'ALL'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-amber-900 hover:text-slate-900'
+                }`}
+                title="View individual sales order lines"
+              >
+                <span>📋 Detailed Lines</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFilters(prev => ({ ...prev, conflictStatus: 'ALL_COMBINED' }));
+                  setCurrentPage(1);
+                }}
+                className={`px-2.5 py-1 rounded-md font-bold text-[11px] transition-all cursor-pointer flex items-center space-x-1 ${
+                  filters.conflictStatus === 'ALL_COMBINED'
+                    ? 'bg-amber-500 text-slate-950 font-black shadow-xs'
+                    : 'text-amber-900 hover:text-slate-900 font-bold'
+                }`}
+                title="Consolidate items by SKU and rank by highest backorder value (Priority #1)"
+              >
+                <Boxes className="w-3.5 h-3.5 text-amber-950 shrink-0" />
+                <span>📦 Consolidated (Priority Ranked)</span>
+              </button>
+            </div>
+          )}
 
           {/* Obsolete View Mode Toggle Pill */}
           {(filters.conflictStatus === 'OBSOLETE' || filters.conflictStatus === 'OBSOLETE_COMBINED') && (
@@ -1201,6 +1342,60 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
         </div>
       </div>
 
+      {/* All Items Consolidated Priority Explanatory Banner */}
+      {filters.conflictStatus === 'ALL_COMBINED' && (
+        <div className="px-4 py-2.5 bg-amber-500/15 border-b border-amber-300 flex flex-wrap items-center justify-between gap-2.5 text-xs text-amber-950">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-1.5 rounded-lg bg-amber-500 text-slate-950 shrink-0 shadow-2xs font-extrabold text-xs">
+              #1
+            </div>
+            <div>
+              <span className="font-extrabold text-slate-900">All Items — Consolidated Priority View:</span>{' '}
+              <span className="text-slate-800">
+                Consolidated backorder sales orders into <strong className="text-slate-950 font-bold">{filteredItems.length} unique SKUs</strong> ranked by total backorder value (<strong className="text-amber-900 font-black">Priority #1 = Highest Value</strong>).
+                Use <strong className="text-amber-900 font-bold">Copy / Export</strong> or <strong className="text-amber-900 font-bold">Export CSV</strong> to save this priority list.
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                const csvText = formatItemsForClipboard(filteredItems, 'csv');
+                downloadCsvFile(`consolidated_backorder_priority_report_${new Date().toISOString().slice(0, 10)}.csv`, csvText);
+              }}
+              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black border border-amber-600 rounded-md text-[11px] transition-colors cursor-pointer shadow-2xs flex items-center space-x-1"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Export CSV File</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (expandedSkuSet.size === filteredItems.length) {
+                  setExpandedSkuSet(new Set());
+                } else {
+                  setExpandedSkuSet(new Set(filteredItems.map(i => i.item)));
+                }
+              }}
+              className="px-2.5 py-1 bg-white hover:bg-amber-100 text-amber-900 font-semibold border border-amber-300 rounded-md text-[11px] transition-colors cursor-pointer shadow-2xs"
+            >
+              {expandedSkuSet.size === filteredItems.length ? 'Collapse All Orders' : 'Expand All Orders'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFilters(prev => ({ ...prev, conflictStatus: 'ALL' }));
+                setCurrentPage(1);
+              }}
+              className="px-2.5 py-1 bg-white hover:bg-amber-100 text-amber-900 font-semibold border border-amber-300 rounded-md text-[11px] transition-colors cursor-pointer shadow-2xs"
+            >
+              Switch to Detailed Lines
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Obsolete Combined Explanatory Banner */}
       {filters.conflictStatus === 'OBSOLETE_COMBINED' && (
         <div className="px-4 py-2.5 bg-rose-50/90 border-b border-rose-200 flex flex-wrap items-center justify-between gap-2.5 text-xs text-rose-950">
@@ -1298,7 +1493,7 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
                 />
               </th>
 
-              {renderHeaderCell('urgency', 'Urgency', 'urgency')}
+              {renderHeaderCell('urgency', filteredItems.some(i => i.priorityRank !== undefined) ? 'Priority / Urgency' : 'Urgency', 'urgency')}
               {renderHeaderCell('item', 'SKU / Item', 'item')}
               {renderHeaderCell('type', 'Type')}
               {renderHeaderCell('qty', 'BO Qty', 'qty')}
@@ -1348,24 +1543,34 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
                         />
                       </td>
 
-                      {/* Urgency Badge */}
+                      {/* Urgency & Priority Badge */}
                       <td
                         style={{ width: `${columnWidths.urgency}px` }}
                         className="py-3 px-3.5 align-middle truncate"
                       >
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                            item.urgency === 'CRITICAL'
-                              ? 'bg-red-100 text-red-800 border border-red-200'
-                              : item.urgency === 'HIGH'
-                              ? 'bg-orange-100 text-orange-800 border border-orange-200'
-                              : item.urgency === 'MEDIUM'
-                              ? 'bg-yellow-100 text-yellow-800 border border-yellow-200'
-                              : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                          }`}
-                        >
-                          {item.urgency}
-                        </span>
+                        <div className="flex items-center space-x-1.5">
+                          {item.priorityRank !== undefined && (
+                            <span
+                              className="px-2 py-0.5 rounded font-black text-[11px] bg-amber-400 text-slate-950 border border-amber-500 shadow-2xs shrink-0 flex items-center space-x-0.5"
+                              title={`Priority #${item.priorityRank} (Highest Backorder Value: $${item.backOrderValueExGst.toLocaleString('en-AU', { minimumFractionDigits: 2 })})`}
+                            >
+                              <span>#{item.priorityRank}</span>
+                            </span>
+                          )}
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                              item.urgency === 'CRITICAL'
+                                ? 'bg-red-100 text-red-800 border border-red-200'
+                                : item.urgency === 'HIGH'
+                                ? 'bg-orange-100 text-orange-800 border border-orange-200'
+                                : item.urgency === 'MEDIUM'
+                                ? 'bg-yellow-100 text-yellow-800 border border-yellow-200'
+                                : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                            }`}
+                          >
+                            {item.urgency}
+                          </span>
+                        </div>
                       </td>
 
                       {/* SKU / Item */}
@@ -1396,7 +1601,17 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
                                 >
                                   {item.item}
                                 </button>
-                                <span className="px-1.5 py-0.2 bg-rose-100 text-rose-800 rounded font-sans font-bold text-[9px] border border-rose-200 shrink-0">
+                                <span
+                                  className={`px-1.5 py-0.2 rounded font-sans font-bold text-[9px] border shrink-0 ${
+                                    item.isObsolete || item.conflictStatus === 'OBSOLETE'
+                                      ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                      : isNoWo
+                                      ? 'bg-red-100 text-red-800 border-red-200'
+                                      : isConflict
+                                      ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                      : 'bg-slate-100 text-slate-800 border-slate-200'
+                                  }`}
+                                >
                                   {item.salesOrderCount} Orders
                                 </span>
                               </div>
@@ -1455,17 +1670,17 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
                         style={{ width: `${columnWidths.status}px` }}
                         className="py-3 px-3.5 align-middle"
                       >
-                        {item.isConsolidated ? (
+                        {item.isObsolete || item.conflictStatus === 'OBSOLETE' ? (
                           <div className="space-y-0.5">
                             <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-100 text-rose-900 font-bold border border-rose-300 text-[10px] tracking-tight truncate max-w-full">
-                              <Boxes className="w-3 h-3 text-rose-600 shrink-0" />
-                              <span className="truncate">OBSOLETE COMBINED</span>
+                              {item.isConsolidated ? <Boxes className="w-3 h-3 text-rose-600 shrink-0" /> : <PackageX className="w-3 h-3 text-rose-600 shrink-0" />}
+                              <span className="truncate">{item.isConsolidated ? 'OBSOLETE COMBINED' : `OBSOLETE (${item.classificationCode || 'XX'})`}</span>
                             </span>
                             <div>
                               {item.cancellationStatus === 'CANCELLED' ? (
                                 <span className="inline-flex items-center space-x-1 px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 font-semibold text-[9px] border border-slate-300">
                                   <Check className="w-2.5 h-2.5 text-emerald-600" />
-                                  <span>All {item.salesOrderCount} SOs Cancelled</span>
+                                  <span>{item.isConsolidated ? `All ${item.salesOrderCount} SOs Cancelled` : 'SO Cancelled'}</span>
                                 </span>
                               ) : item.cancellationStatus === 'EMAIL_SENT' ? (
                                 <span className="inline-flex items-center space-x-1 px-1.5 py-0.2 rounded bg-blue-100 text-blue-800 font-semibold text-[9px] border border-blue-200">
@@ -1474,31 +1689,7 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center space-x-1 px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 font-semibold text-[9px] border border-rose-200">
-                                  <span>{item.salesOrderCount} Orders Pending Cancel</span>
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ) : item.isObsolete ? (
-                          <div className="space-y-0.5">
-                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-100 text-rose-900 font-bold border border-rose-300 text-[10px] tracking-tight truncate max-w-full">
-                              <PackageX className="w-3 h-3 text-rose-600 shrink-0" />
-                              <span className="truncate">OBSOLETE ({item.classificationCode || 'XX'})</span>
-                            </span>
-                            <div>
-                              {item.cancellationStatus === 'CANCELLED' ? (
-                                <span className="inline-flex items-center space-x-1 px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 font-semibold text-[9px] border border-slate-300">
-                                  <Check className="w-2.5 h-2.5 text-emerald-600" />
-                                  <span>SO Cancelled</span>
-                                </span>
-                              ) : item.cancellationStatus === 'EMAIL_SENT' ? (
-                                <span className="inline-flex items-center space-x-1 px-1.5 py-0.2 rounded bg-blue-100 text-blue-800 font-semibold text-[9px] border border-blue-200">
-                                  <Mail className="w-2.5 h-2.5 text-blue-600" />
-                                  <span>Email Sent</span>
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center space-x-1 px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 font-semibold text-[9px] border border-rose-200">
-                                  <span>Cancel Needed</span>
+                                  <span>{item.isConsolidated ? `${item.salesOrderCount} Orders Pending Cancel` : 'Cancel Needed'}</span>
                                 </span>
                               )}
                             </div>
@@ -1506,24 +1697,52 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
                         ) : item.isShippingOrNonInventory ? (
                           <span className="text-slate-400 italic text-[11px]">Non-inventory</span>
                         ) : isNoWo ? (
-                          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-red-100 text-red-800 font-bold border border-red-200 text-[11px] truncate max-w-full">
-                            <PackageX className="w-3 h-3 text-red-600 shrink-0" />
-                            <span className="truncate">No Work Order</span>
-                          </span>
+                          <div className="space-y-0.5">
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-red-100 text-red-800 font-bold border border-red-200 text-[11px] truncate max-w-full">
+                              <PackageX className="w-3 h-3 text-red-600 shrink-0" />
+                              <span className="truncate">No Work Order</span>
+                            </span>
+                            {item.isConsolidated && (
+                              <div className="text-[10px] font-semibold text-red-700">
+                                Uncovered across {item.salesOrderCount} SOs
+                              </div>
+                            )}
+                          </div>
                         ) : isConflict ? (
-                          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-bold border border-amber-200 text-[11px] truncate max-w-full">
-                            <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
-                            <span className="truncate">Late Completion</span>
-                          </span>
+                          <div className="space-y-0.5">
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-bold border border-amber-200 text-[11px] truncate max-w-full">
+                              <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                              <span className="truncate">Late Completion</span>
+                            </span>
+                            {item.isConsolidated && (
+                              <div className="text-[10px] font-semibold text-amber-800">
+                                Schedule Conflict ({item.salesOrderCount} SOs)
+                              </div>
+                            )}
+                          </div>
                         ) : item.conflictStatus === 'QUANTITY_SHORTAGE' ? (
-                          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-yellow-100 text-yellow-800 font-bold border border-yellow-200 text-[11px] truncate max-w-full">
-                            <span className="truncate">Qty Shortage</span>
-                          </span>
+                          <div className="space-y-0.5">
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-yellow-100 text-yellow-800 font-bold border border-yellow-200 text-[11px] truncate max-w-full">
+                              <span className="truncate">Qty Shortage</span>
+                            </span>
+                            {item.isConsolidated && (
+                              <div className="text-[10px] font-semibold text-yellow-800">
+                                Shortage across {item.salesOrderCount} SOs
+                              </div>
+                            )}
+                          </div>
                         ) : (
-                          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold border border-emerald-200 text-[11px] truncate max-w-full">
-                            <CheckCircle className="w-3 h-3 text-emerald-600 shrink-0" />
-                            <span className="truncate">WO Scheduled</span>
-                          </span>
+                          <div className="space-y-0.5">
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold border border-emerald-200 text-[11px] truncate max-w-full">
+                              <CheckCircle className="w-3 h-3 text-emerald-600 shrink-0" />
+                              <span className="truncate">WO Scheduled</span>
+                            </span>
+                            {item.isConsolidated && (
+                              <div className="text-[10px] font-semibold text-emerald-700">
+                                Covered ({item.salesOrderCount} SOs)
+                              </div>
+                            )}
+                          </div>
                         )}
                       </td>
 
@@ -1589,30 +1808,21 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
                             )}
                           </button>
 
-                          {item.isConsolidated ? (
+                          {item.isObsolete || item.conflictStatus === 'OBSOLETE' ? (
                             <button
                               onClick={() => onOpenCancelEmailModal?.(item)}
                               className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded text-[11px] transition-colors shadow-2xs cursor-pointer active:scale-95 flex items-center space-x-1"
-                              title={`Draft cancel email listing all ${item.salesOrderCount} Sales Orders for SKU ${item.item}`}
+                              title={item.isConsolidated ? `Draft cancel email listing all ${item.salesOrderCount} Sales Orders for SKU ${item.item}` : 'Draft email notice to cancel sales order'}
                             >
                               <Mail className="w-3 h-3" />
-                              <span>Cancel SO ({item.salesOrderCount})</span>
-                            </button>
-                          ) : item.isObsolete ? (
-                            <button
-                              onClick={() => onOpenCancelEmailModal?.(item)}
-                              className="px-2 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded text-[11px] transition-colors shadow-2xs cursor-pointer active:scale-95 flex items-center space-x-1"
-                              title="Draft email notice to cancel sales order"
-                            >
-                              <Mail className="w-3 h-3" />
-                              <span>Cancel SO</span>
+                              <span>Cancel SO{item.isConsolidated ? ` (${item.salesOrderCount})` : ''}</span>
                             </button>
                           ) : (
-                            !item.isShippingOrNonInventory && (isNoWo || isConflict) && (
+                            !item.isShippingOrNonInventory && (isNoWo || isConflict || item.conflictStatus === 'QUANTITY_SHORTAGE') && (
                               <button
                                 onClick={() => onQuickCreateWo(item)}
                                 className="px-2 py-1 bg-amber-400 hover:bg-amber-300 text-slate-900 font-bold rounded text-[11px] transition-colors shadow-2xs cursor-pointer active:scale-95"
-                                title="Create scheduled Work Order for this SKU"
+                                title={`Create scheduled Work Order for SKU ${item.item}`}
                               >
                                 + WO
                               </button>
@@ -1631,26 +1841,45 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
 
                     {/* Constituent Orders Expandable Panel (when item is consolidated) */}
                     {isExpanded && item.constituentOrders && item.constituentOrders.length > 0 && (
-                      <tr className="bg-rose-50/40 border-b border-rose-200/60">
+                      <tr className={`${
+                        item.isObsolete || item.conflictStatus === 'OBSOLETE'
+                          ? 'bg-rose-50/40 border-b border-rose-200/60'
+                          : isNoWo
+                          ? 'bg-red-50/40 border-b border-red-200/60'
+                          : isConflict
+                          ? 'bg-amber-50/40 border-b border-amber-200/60'
+                          : 'bg-slate-50/60 border-b border-slate-200/60'
+                      }`}>
                         <td colSpan={12} className="py-3 px-4">
-                          <div className="rounded-lg border border-rose-200 bg-white p-3.5 shadow-xs">
-                            <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5 pb-2 border-b border-rose-100">
+                          <div className={`rounded-lg border bg-white p-3.5 shadow-xs ${
+                            item.isObsolete || item.conflictStatus === 'OBSOLETE' ? 'border-rose-200' : 'border-slate-200'
+                          }`}>
+                            <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5 pb-2 border-b border-slate-100">
                               <div className="flex items-center space-x-2">
                                 <span className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
-                                  <Boxes className="w-3.5 h-3.5 text-rose-600" />
-                                  Constituent Orders for SKU <span className="font-mono text-rose-900 bg-rose-100 px-1.5 py-0.5 rounded">{item.item}</span>:
+                                  <Boxes className="w-3.5 h-3.5 text-slate-600" />
+                                  Constituent Orders for SKU <span className="font-mono text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded font-bold">{item.item}</span>:
                                 </span>
                                 <span className="text-[11px] text-slate-500">
                                   ({item.constituentOrders.length} order lines totaling {item.backOrderQty.toLocaleString()} units, ${(item.backOrderValueExGst).toFixed(2)} ex GST)
                                 </span>
                               </div>
-                              <button
-                                onClick={() => onOpenCancelEmailModal?.(item)}
-                                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded text-[10px] transition-colors cursor-pointer flex items-center space-x-1 shadow-2xs"
-                              >
-                                <Mail className="w-3 h-3" />
-                                <span>Draft Combined Cancel Email ({item.salesOrderList?.length || item.constituentOrders.length} SOs)</span>
-                              </button>
+                              {item.isObsolete || item.conflictStatus === 'OBSOLETE' ? (
+                                <button
+                                  onClick={() => onOpenCancelEmailModal?.(item)}
+                                  className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded text-[10px] transition-colors cursor-pointer flex items-center space-x-1 shadow-2xs"
+                                >
+                                  <Mail className="w-3 h-3" />
+                                  <span>Draft Combined Cancel Email ({item.salesOrderList?.length || item.constituentOrders.length} SOs)</span>
+                                </button>
+                              ) : (isNoWo || isConflict) && (
+                                <button
+                                  onClick={() => onQuickCreateWo(item)}
+                                  className="px-2.5 py-1 bg-amber-400 hover:bg-amber-300 text-slate-900 font-bold rounded text-[10px] transition-colors cursor-pointer flex items-center space-x-1 shadow-2xs"
+                                >
+                                  <span>+ Schedule Work Order for {item.item}</span>
+                                </button>
+                              )}
                             </div>
 
                             <div className="overflow-x-auto">
@@ -1669,45 +1898,87 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
-                                  {item.constituentOrders.map((subOrder, subIdx) => (
-                                    <tr key={`${subOrder.id}-${subIdx}`} className="hover:bg-rose-50/30 transition-colors">
-                                      <td className="py-1.5 px-2.5 font-mono font-bold text-slate-900">{subOrder.documentNumber}</td>
-                                      <td className="py-1.5 px-2.5 text-slate-800 font-medium">{subOrder.customerName}</td>
-                                      <td className="py-1.5 px-2.5 text-slate-500">{subOrder.customerPo || '—'}</td>
-                                      <td className="py-1.5 px-2.5 text-amber-900">
-                                        <span className="bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 text-[10px] font-medium">
-                                          📍 {subOrder.location || 'Unassigned'}
-                                        </span>
-                                      </td>
-                                      <td className="py-1.5 px-2.5 text-right font-bold text-slate-900">{subOrder.backOrderQty.toLocaleString()}</td>
-                                      <td className="py-1.5 px-2.5 text-right font-medium text-slate-800">${subOrder.backOrderValueExGst.toFixed(2)}</td>
-                                      <td className="py-1.5 px-2.5 text-slate-600">{subOrder.supplyRequiredByDate || '—'}</td>
-                                      <td className="py-1.5 px-2.5 text-center">
-                                        {subOrder.cancellationStatus === 'CANCELLED' ? (
-                                          <span className="inline-flex items-center px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 text-[9px] font-semibold border border-slate-300">
-                                            SO Cancelled
+                                  {item.constituentOrders.map((subOrder, subIdx) => {
+                                    const subIsObsolete = subOrder.isObsolete || subOrder.conflictStatus === 'OBSOLETE';
+                                    const subIsNoWo = subOrder.conflictStatus === 'NO_WORK_ORDER';
+                                    const subIsConflict = subOrder.conflictStatus === 'SCHEDULE_CONFLICT';
+
+                                    return (
+                                      <tr key={`${subOrder.id}-${subIdx}`} className="hover:bg-slate-50 transition-colors">
+                                        <td className="py-1.5 px-2.5 font-mono font-bold text-slate-900">{subOrder.documentNumber}</td>
+                                        <td className="py-1.5 px-2.5 text-slate-800 font-medium">{subOrder.customerName}</td>
+                                        <td className="py-1.5 px-2.5 text-slate-500">{subOrder.customerPo || '—'}</td>
+                                        <td className="py-1.5 px-2.5 text-amber-900">
+                                          <span className="bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 text-[10px] font-medium">
+                                            📍 {subOrder.location || 'Unassigned'}
                                           </span>
-                                        ) : subOrder.cancellationStatus === 'EMAIL_SENT' ? (
-                                          <span className="inline-flex items-center px-1.5 py-0.2 rounded bg-blue-100 text-blue-800 text-[9px] font-semibold border border-blue-200">
-                                            Email Sent
-                                          </span>
-                                        ) : (
-                                          <span className="inline-flex items-center px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 text-[9px] font-semibold border border-rose-200">
-                                            Cancel Needed
-                                          </span>
-                                        )}
-                                      </td>
-                                      <td className="py-1.5 px-2.5 text-right">
-                                        <button
-                                          onClick={() => onOpenCancelEmailModal?.(subOrder)}
-                                          className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-slate-900 font-medium rounded text-[10px] transition-colors cursor-pointer"
-                                          title={`Draft email for SO ${subOrder.documentNumber} only`}
-                                        >
-                                          Email SO
-                                        </button>
-                                      </td>
-                                    </tr>
-                                  ))}
+                                        </td>
+                                        <td className="py-1.5 px-2.5 text-right font-bold text-slate-900">{subOrder.backOrderQty.toLocaleString()}</td>
+                                        <td className="py-1.5 px-2.5 text-right font-medium text-slate-800">${subOrder.backOrderValueExGst.toFixed(2)}</td>
+                                        <td className="py-1.5 px-2.5 text-slate-600">{subOrder.supplyRequiredByDate || '—'}</td>
+                                        <td className="py-1.5 px-2.5 text-center">
+                                          {subIsObsolete ? (
+                                            subOrder.cancellationStatus === 'CANCELLED' ? (
+                                              <span className="inline-flex items-center px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 text-[9px] font-semibold border border-slate-300">
+                                                SO Cancelled
+                                              </span>
+                                            ) : subOrder.cancellationStatus === 'EMAIL_SENT' ? (
+                                              <span className="inline-flex items-center px-1.5 py-0.2 rounded bg-blue-100 text-blue-800 text-[9px] font-semibold border border-blue-200">
+                                                Email Sent
+                                              </span>
+                                            ) : (
+                                              <span className="inline-flex items-center px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 text-[9px] font-semibold border border-rose-200">
+                                                Cancel Needed
+                                              </span>
+                                            )
+                                          ) : subIsNoWo ? (
+                                            <span className="inline-flex items-center px-1.5 py-0.2 rounded bg-red-100 text-red-800 text-[9px] font-bold border border-red-200">
+                                              No Work Order
+                                            </span>
+                                          ) : subIsConflict ? (
+                                            <span className="inline-flex items-center px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 text-[9px] font-bold border border-amber-200">
+                                              Late Completion
+                                            </span>
+                                          ) : subOrder.conflictStatus === 'QUANTITY_SHORTAGE' ? (
+                                            <span className="inline-flex items-center px-1.5 py-0.2 rounded bg-yellow-100 text-yellow-800 text-[9px] font-bold border border-yellow-200">
+                                              Qty Shortage
+                                            </span>
+                                          ) : (
+                                            <span className="inline-flex items-center px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 text-[9px] font-semibold border border-emerald-200">
+                                              WO Scheduled
+                                            </span>
+                                          )}
+                                        </td>
+                                        <td className="py-1.5 px-2.5 text-right">
+                                          {subIsObsolete ? (
+                                            <button
+                                              onClick={() => onOpenCancelEmailModal?.(subOrder)}
+                                              className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-slate-900 font-medium rounded text-[10px] transition-colors cursor-pointer"
+                                              title={`Draft email for SO ${subOrder.documentNumber} only`}
+                                            >
+                                              Email SO
+                                            </button>
+                                          ) : (subIsNoWo || subIsConflict) ? (
+                                            <button
+                                              onClick={() => onQuickCreateWo(subOrder)}
+                                              className="px-2 py-0.5 bg-amber-400 hover:bg-amber-300 text-slate-900 font-bold rounded text-[10px] transition-colors cursor-pointer"
+                                              title={`Create Work Order for SO ${subOrder.documentNumber}`}
+                                            >
+                                              + WO
+                                            </button>
+                                          ) : (
+                                            <button
+                                              onClick={() => onSelectItem(subOrder)}
+                                              className="p-1 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded transition-colors cursor-pointer"
+                                              title="View Details"
+                                            >
+                                              <ExternalLink className="w-3 h-3" />
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             </div>

@@ -449,47 +449,91 @@ export function detectCsvType(csvText: string): { type: 'main_extract' | 'backor
  * Converts array of BackOrderItems back to CSV string, including Obsolete details
  */
 export function exportBackOrdersToCsv(items: BackOrderItem[]): string {
-  const headers = [
-    'Item',
-    'Description',
-    'Back Order Qty',
-    'Supply Required By Date',
-    'Urgency Level',
-    'WO Conflict Status',
-    'Is Obsolete',
-    'Classification Code',
-    'Supply Risk',
-    'Cancellation Status',
-    'Document Number',
-    'Status',
-    'Expected Ship Date',
-    'Customer PO#',
-    'Back Order Order Value (EXT Ex GST)',
-    'Location',
-    'Customer Name',
-    'Brand'
-  ];
+  const isConsolidatedSet = items.some(i => i.isConsolidated || i.priorityRank !== undefined);
 
-  const rows = items.map(item => [
-    `"${item.item}"`,
-    `"${(item.productDescription || '').replace(/"/g, '""')}"`,
-    item.backOrderQty,
-    `"${item.supplyRequiredByDate}"`,
-    `"${item.urgency}"`,
-    `"${item.conflictStatus}"`,
-    `"${item.isObsolete ? 'YES - OBSOLETE' : 'NO'}"`,
-    `"${item.classificationCode || 'N/A'}"`,
-    `"${item.supplyRisk || 'N/A'}"`,
-    `"${item.cancellationStatus || 'PENDING'}"`,
-    `"${item.documentNumber}"`,
-    `"${item.status}"`,
-    `"${item.expectedShipDate}"`,
-    `"${item.customerPo}"`,
-    item.backOrderValueExGst.toFixed(2),
-    `"${item.location}"`,
-    `"${item.customerName.replace(/"/g, '""')}"`,
-    `"${item.brand}"`
-  ]);
+  const headers = isConsolidatedSet
+    ? [
+        'Priority Rank',
+        'SKU / Item',
+        'Description',
+        'Total Back Order Qty',
+        'Earliest Required Date',
+        'Urgency Level',
+        'WO Conflict Status',
+        'Total Sales Orders',
+        'Sales Order Numbers',
+        'Customer POs',
+        'Total Back Order Value ($ ex GST)',
+        'Warehouse Location(s)',
+        'Customers',
+        'Brand'
+      ]
+    : [
+        'Item',
+        'Description',
+        'Back Order Qty',
+        'Supply Required By Date',
+        'Urgency Level',
+        'WO Conflict Status',
+        'Is Obsolete',
+        'Classification Code',
+        'Supply Risk',
+        'Cancellation Status',
+        'Document Number',
+        'Status',
+        'Expected Ship Date',
+        'Customer PO#',
+        'Back Order Order Value (EXT Ex GST)',
+        'Location',
+        'Customer Name',
+        'Brand'
+      ];
+
+  const rows = items.map(item => {
+    if (isConsolidatedSet) {
+      const docStr = item.salesOrderList && item.salesOrderList.length > 0
+        ? item.salesOrderList.join(', ')
+        : item.documentNumber;
+
+      return [
+        `"#${item.priorityRank || 'N/A'}"`,
+        `"${item.item.replace(/"/g, '""')}"`,
+        `"${(item.productDescription || '').replace(/"/g, '""')}"`,
+        item.backOrderQty,
+        `"${item.supplyRequiredByDate}"`,
+        `"${item.urgency}"`,
+        `"${item.conflictStatus}"`,
+        item.salesOrderCount || 1,
+        `"${docStr.replace(/"/g, '""')}"`,
+        `"${(item.customerPo || '').replace(/"/g, '""')}"`,
+        item.backOrderValueExGst.toFixed(2),
+        `"${(item.location || '').replace(/"/g, '""')}"`,
+        `"${(item.customerName || '').replace(/"/g, '""')}"`,
+        `"${(item.brand || '').replace(/"/g, '""')}"`
+      ];
+    }
+
+    return [
+      `"${item.item}"`,
+      `"${(item.productDescription || '').replace(/"/g, '""')}"`,
+      item.backOrderQty,
+      `"${item.supplyRequiredByDate}"`,
+      `"${item.urgency}"`,
+      `"${item.conflictStatus}"`,
+      `"${item.isObsolete ? 'YES - OBSOLETE' : 'NO'}"`,
+      `"${item.classificationCode || 'N/A'}"`,
+      `"${item.supplyRisk || 'N/A'}"`,
+      `"${item.cancellationStatus || 'PENDING'}"`,
+      `"${item.documentNumber}"`,
+      `"${item.status}"`,
+      `"${item.expectedShipDate}"`,
+      `"${item.customerPo}"`,
+      item.backOrderValueExGst.toFixed(2),
+      `"${item.location}"`,
+      `"${item.customerName.replace(/"/g, '""')}"`,
+      `"${item.brand}"`
+    ];
+  });
 
   return [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
 }

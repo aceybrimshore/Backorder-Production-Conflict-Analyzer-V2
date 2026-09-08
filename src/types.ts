@@ -80,6 +80,7 @@ export interface BackOrderItem {
   salesOrderCount?: number;
   salesOrderList?: string[];
   constituentOrders?: BackOrderItem[];
+  priorityRank?: number;
 
   // Computed fields
   urgency: UrgencyLevel;
