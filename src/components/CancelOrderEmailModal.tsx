@@ -139,18 +139,14 @@ export const CancelOrderEmailModal: React.FC<CancelOrderEmailModalProps> = ({
 
         setBody(
 `Dear Customer Service,
-
-Please cancel sales order lines relating to the obsolete item(s) listed below.
+Please cancel the line item for the obsolete SKU listed below wherever it appears on the following sales orders.
 
 Item Details
 
 Item Number / SKU: ${singleGroup.sku}
 Description: ${singleGroup.description}
 
-Sales Orders for Cancellation: ${soListFormatted}
-
-
-Regards,`
+Sales Orders : ${soListFormatted}`
         );
       } else {
         // Multi-SKU Batch
@@ -158,19 +154,16 @@ Regards,`
 
         setBody(
 `Dear Customer Service,
-
-Please cancel sales order lines relating to the obsolete item(s) listed below.
+Please cancel the line items for the obsolete SKUs listed below wherever they appear on the following sales orders.
 
 Item Details
 
 ${groupedBySku.map(g => 
 `Item Number / SKU: ${g.sku}
 Description: ${g.description}
-Sales Orders for Cancellation: ${g.soNumbers.join(', ')}`
-).join('\n\n')}
 
-
-Regards,`
+Sales Orders : ${g.soNumbers.join(', ')}`
+).join('\n\n')}`
         );
       }
     } else if (selectedTemplate === 'detailed_erp') {
