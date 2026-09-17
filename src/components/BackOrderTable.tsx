@@ -67,6 +67,7 @@ export interface ColumnWidths {
 }
 
 const STORAGE_KEY_COL_WIDTHS = 'backorder_table_column_widths_v2';
+const STORAGE_KEY_PAGE_SIZE = 'backorder_table_page_size_v2';
 
 const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
   urgency: 110,
@@ -441,7 +442,29 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
   ]);
 
   const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 15;
+  const [pageSize, setPageSize] = useState<number | 'ALL'>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_PAGE_SIZE);
+      if (saved === 'ALL') return 'ALL';
+      if (saved) {
+        const num = parseInt(saved, 10);
+        if ([15, 30, 50, 100].includes(num)) return num;
+      }
+    } catch {
+      // fallback
+    }
+    return 15;
+  });
+
+  const handlePageSizeChange = (newSize: number | 'ALL') => {
+    setPageSize(newSize);
+    setCurrentPage(1);
+    try {
+      localStorage.setItem(STORAGE_KEY_PAGE_SIZE, String(newSize));
+    } catch {
+      // ignore quota
+    }
+  };
 
   // Set of expanded SKU item codes for consolidated rows
   const [expandedSkuSet, setExpandedSkuSet] = useState<Set<string>>(new Set());
@@ -816,12 +839,16 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
     }
   };
 
-  // Pagination
-  const totalPages = Math.ceil(filteredItems.length / pageSize) || 1;
+  // Pagination & Display Range
+  const isShowAll = pageSize === 'ALL';
+  const totalPages = isShowAll ? 1 : Math.ceil(filteredItems.length / pageSize) || 1;
   const paginatedItems = useMemo(() => {
+    if (isShowAll) {
+      return filteredItems;
+    }
     const start = (currentPage - 1) * pageSize;
     return filteredItems.slice(start, start + pageSize);
-  }, [filteredItems, currentPage, pageSize]);
+  }, [filteredItems, currentPage, pageSize, isShowAll]);
 
   // Page vs All selection state
   const isAllPageSelected = paginatedItems.length > 0 && paginatedItems.every(i => selectedIds.has(i.id));
@@ -1337,6 +1364,11 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
             )}
             <span>
               Showing <strong className="text-slate-900">{filteredItems.length}</strong> items
+              {pageSize === 'ALL' ? (
+                <span className="ml-1.5 text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded border border-emerald-300">All visible</span>
+              ) : (
+                <span className="ml-1 text-slate-400 text-[11px]">({paginatedItems.length} on page)</span>
+              )}
             </span>
           </div>
         </div>
@@ -1996,27 +2028,88 @@ export const BackOrderTable: React.FC<BackOrderTableProps> = ({
 
       {/* Pagination Footer */}
       <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="text-xs text-slate-500 font-medium">
-          Page <strong className="text-slate-900">{currentPage}</strong> of <strong className="text-slate-900">{totalPages}</strong> (showing {paginatedItems.length} of {filteredItems.length} items)
+        <div className="text-xs text-slate-500 font-medium flex flex-wrap items-center gap-3">
+          <div>
+            {pageSize === 'ALL' ? (
+              <span className="flex items-center space-x-1.5">
+                <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>
+                  Showing all <strong className="text-slate-900 font-bold">{filteredItems.length}</strong> items (single scrollable view)
+                </span>
+              </span>
+            ) : (
+              <span>
+                Page <strong className="text-slate-900">{currentPage}</strong> of{' '}
+                <strong className="text-slate-900">{totalPages}</strong> (showing{' '}
+                <strong className="text-slate-900">{paginatedItems.length}</strong> of{' '}
+                <strong className="text-slate-900">{filteredItems.length}</strong> items)
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center space-x-1.5 sm:border-l sm:border-slate-200 sm:pl-3">
+            <span className="text-[11px] text-slate-400 font-medium">Show:</span>
+            {[15, 30, 50, 100].map(size => (
+              <button
+                key={size}
+                type="button"
+                onClick={() => handlePageSizeChange(size)}
+                className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors cursor-pointer ${
+                  pageSize === size
+                    ? 'bg-amber-500 text-slate-950 shadow-2xs font-bold'
+                    : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+                title={`Show ${size} rows per page`}
+              >
+                {size}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => handlePageSizeChange(pageSize === 'ALL' ? 15 : 'ALL')}
+              className={`px-2.5 py-0.5 rounded text-[11px] transition-all cursor-pointer flex items-center space-x-1 font-bold ${
+                pageSize === 'ALL'
+                  ? 'bg-amber-500 text-slate-950 shadow-2xs ring-1 ring-amber-600/50'
+                  : 'bg-white border border-amber-300 text-amber-900 hover:bg-amber-50'
+              }`}
+              title={
+                pageSize === 'ALL'
+                  ? 'Switch back to 15 items per page'
+                  : `Display all ${filteredItems.length} items on a single page without pagination`
+              }
+            >
+              <span>{pageSize === 'ALL' ? '✓ Showing All' : `Show All (${filteredItems.length})`}</span>
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center space-x-2">
-          <button
-            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-            disabled={currentPage === 1}
-            className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 disabled:opacity-40 hover:bg-slate-100 flex items-center space-x-1 text-xs font-semibold cursor-pointer disabled:cursor-not-allowed"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            <span>Prev</span>
-          </button>
-          <button
-            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-            disabled={currentPage === totalPages}
-            className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 disabled:opacity-40 hover:bg-slate-100 flex items-center space-x-1 text-xs font-semibold cursor-pointer disabled:cursor-not-allowed"
-          >
-            <span>Next</span>
-            <ChevronRight className="w-4 h-4" />
-          </button>
+          {pageSize === 'ALL' ? (
+            <span className="text-[11px] text-slate-400 font-medium italic">
+              All {filteredItems.length} rows displayed
+            </span>
+          ) : (
+            <>
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 disabled:opacity-40 hover:bg-slate-100 flex items-center space-x-1 text-xs font-semibold cursor-pointer disabled:cursor-not-allowed transition-colors"
+                title="Previous page"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span>Prev</span>
+              </button>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 disabled:opacity-40 hover:bg-slate-100 flex items-center space-x-1 text-xs font-semibold cursor-pointer disabled:cursor-not-allowed transition-colors"
+                title="Next page"
+              >
+                <span>Next</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
